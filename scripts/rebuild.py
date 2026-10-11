@@ -27,8 +27,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from engine import Data, run           # noqa: E402
+from paths import SRC          # noqa: E402  路径：本机 Windows 与云端 Linux 通用
 
-SRC = r"C:\Users\12066\WorkBuddy\2026-10-05-23-13-30"
 OUT = os.path.join(SRC, "data")
 
 N, K, L = 15, 10, 50

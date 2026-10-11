@@ -26,8 +26,9 @@ import pandas as pd
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-BASE = r"C:\Users\12066\WorkBuddy\2026-10-09-23-54-07\mom_opt"
-SRC = r"C:\Users\12066\WorkBuddy\2026-10-05-23-13-30"
+# 路径统一由 paths.py 解析（本机 Windows 与云端 Linux 通用，支持 MOM_OPT_DIR / POOL_BASE 覆盖）
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from paths import BASE, SRC  # noqa: E402
 
 START = "2019-05-06"
 MIN_LISTED = 60
