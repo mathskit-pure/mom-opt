@@ -1,0 +1,10 @@
+# mom_opt 回测引擎：数据与产物均不由 git 承载
+#   data/    原始不复权 OHLC，由 scripts/fetch_ohlc.py 重建
+#   output/  rebuild.py 产出的 nav / holdings / removed / summary，可确定性重算
+data/
+output/
+__pycache__/
+*.py[cod]
+*.log
+.DS_Store
+.workbuddy/
