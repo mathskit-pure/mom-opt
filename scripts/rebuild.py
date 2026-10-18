@@ -29,6 +29,29 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from engine import Data, run           # noqa: E402
 from paths import SRC          # noqa: E402  路径：本机 Windows 与云端 Linux 通用
 
+sys.path.insert(0, os.path.join(str(SRC), "scripts"))
+try:
+    import quality_v2 as Q2     # 质量 Top28 v2 选股/加权规则（pool-core/scripts）
+except Exception as _e:        # 规则文件缺失时退回旧权重，不阻断整链
+    Q2 = None
+    print("! 未加载 quality_v2（%s），质量组合退回旧权重" % _e)
+
+
+def load_turnover():
+    """换手率面板：{报告期: {code: (adv20, turn)}}；缺失返回空字典（自动降级）"""
+    if Q2 is None:
+        return {}
+    f = os.path.join(str(SRC), "data", "turnover_panel.csv")
+    if not os.path.exists(f):
+        print("! 未找到 turnover_panel.csv，质量组合退回旧权重")
+        return {}
+    t = pd.read_csv(f, encoding="utf-8-sig", dtype={"code": str})
+    out = {}
+    for per, g in t.groupby("报告期"):
+        out[per] = {r["code"]: (float(r["adv20"]), float(r["turn"])) for _, r in g.iterrows()}
+    print("换手面板：%d 期 · %d 只" % (len(out), t["code"].nunique()))
+    return out
+
 OUT = os.path.join(SRC, "data")
 
 N, K, L = 15, 10, 50
@@ -109,6 +132,7 @@ def main():
     sw3 = {c: (meta.get(c, {}).get("sw3") or "未分类") for c in close.columns}
     name = {c: (meta.get(c, {}).get("name") or c) for c in close.columns}
     score_map_by_period = {k: dict(v) for k, v in score_by_period.items()}
+    turn_by_period = load_turnover()
 
     def price_at(code, d):
         """取 d 日（或之前最近交易日）收盘价，用于计算持仓区间涨跌幅。"""
@@ -145,16 +169,30 @@ def main():
             ok_q = {c for c in close.columns if listed.iloc[pos].get(c, 0) >= MIN_LISTED}
             cand = [(c, s) for c, s in score_by_period.get(per, [])
                     if c in close.columns and c in ok_q]
-            qcodes, cnt = [], {}
-            for c, s in cand:
-                if len(qcodes) >= LQ:
-                    break
-                ind = sw3.get(c, "未分类")
-                if cnt.get(ind, 0) >= MAX_PER_IND_Q:
-                    continue
-                cnt[ind] = cnt.get(ind, 0) + 1
-                qcodes.append(c)
-            qw = qual_weights(len(qcodes))
+            if Q2 is not None:
+                picked_v2, v2meta = Q2.select_v2(cand, sw3, turn_by_period.get(per, {}),
+                                                 lq=LQ, max_per_ind=MAX_PER_IND_Q)
+            else:
+                picked_v2, v2meta = [], {"degrade": "v1", "floor": None}
+            if picked_v2 and v2meta["degrade"] == "ok":
+                qcodes = [c for c, _, _ in picked_v2]
+                qw = [ww for _, ww, _ in picked_v2]
+                qpct = {c: p for c, _, p in picked_v2}
+                print("  %s %s 持仓 %d 只（门槛 %.0f 万）"
+                      % (dd.date(), per, len(qcodes), (v2meta["floor"] or 0) / 1e4))
+            else:                       # 降级：退回旧口径（前3名16%）
+                qcodes, cnt = [], {}
+                for c, s in cand:
+                    if len(qcodes) >= LQ:
+                        break
+                    ind = sw3.get(c, "未分类")
+                    if cnt.get(ind, 0) >= MAX_PER_IND_Q:
+                        continue
+                    cnt[ind] = cnt.get(ind, 0) + 1
+                    qcodes.append(c)
+                qw = qual_weights(len(qcodes))
+                qpct = {}
+                print("  [降级] %s %s（%s）" % (dd.date(), per, v2meta["degrade"]))
             w = pd.Series(0.0, index=close.columns)
             for c, ww in zip(qcodes, qw):
                 w[c] = ww
@@ -180,6 +218,7 @@ def main():
                                   "代码": c, "名称": name.get(c, c),
                                   "申万三级": sw3.get(c, "未分类"),
                                   "FAQ得分": smap.get(c),
+                                  "换手分位": qpct.get(c),
                                   "建仓权重": qw[rank - 1] if qcodes else 0,
                                   "状态": "新增" if c not in q_prev_set else "持有"})
             q_prev_set = qset
@@ -249,8 +288,11 @@ def main():
 
     # 质量 Top28 明细（4.2 持仓变动表消费）：与旧口径产物列完全一致
     q_df = pd.DataFrame(qual_rows)
+    for col in ("换手分位", "建仓权重"):
+        if col not in q_df.columns:
+            q_df[col] = np.nan
     q_df = q_df[["报告期", "调仓日", "次序", "代码", "名称", "申万三级",
-                 "FAQ得分", "建仓权重", "状态"]]
+                 "FAQ得分", "换手分位", "建仓权重", "状态"]]
     q_df.to_csv(os.path.join(OUT, "quality_top28.csv"), index=False, encoding="utf-8-sig")
     qr_df = pd.DataFrame(qual_removed)
     qr_df = qr_df[["调仓日", "代码", "名称", "申万三级", "建仓日", "区间涨跌幅"]]
